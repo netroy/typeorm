@@ -17,6 +17,9 @@ export interface MigrationInterface {
      */
     transaction?: boolean
 
+    beforeTransaction?(queryRunner: QueryRunner): Promise<void>
+    afterTransaction?(queryRunner: QueryRunner): Promise<void>
+
     /**
      * Run the migrations.
      */

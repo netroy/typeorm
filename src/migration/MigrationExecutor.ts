@@ -81,7 +81,7 @@ export class MigrationExecutor {
             }
 
             await queryRunner.beforeMigration()
-            await (migration.instance as any).up(queryRunner)
+            await migration.instance!.up(queryRunner)
             await queryRunner.afterMigration()
             await this.insertExecutedMigration(queryRunner, migration)
 
@@ -328,41 +328,38 @@ export class MigrationExecutor {
                 }
 
                 if (migration.transaction && !queryRunner.isTransactionActive) {
+                    await migration.instance!.beforeTransaction?.(queryRunner)
                     await queryRunner.beforeMigration()
                     await queryRunner.startTransaction()
                     transactionStartedByUs = true
                 }
 
-                await migration
-                    .instance!.up(queryRunner)
-                    .catch((error) => {
-                        // informative log about migration failure
-                        this.connection.logger.logMigration(
-                            `Migration "${migration.name}" failed, error: ${error?.message}`,
-                        )
-                        throw error
-                    })
-                    .then(async () => {
-                        // now when migration is executed we need to insert record about it into the database
-                        await this.insertExecutedMigration(
-                            queryRunner,
-                            migration,
-                        )
-                        // commit transaction if we started it
-                        if (migration.transaction && transactionStartedByUs) {
-                            await queryRunner.commitTransaction()
-                            await queryRunner.afterMigration()
-                        }
-                    })
-                    .then(() => {
-                        // informative log about migration success
-                        successMigrations.push(migration)
-                        this.connection.logger.logSchemaBuild(
-                            `Migration ${migration.name} has been ${
-                                this.fake ? "(fake)" : ""
-                            } executed successfully.`,
-                        )
-                    })
+                try {
+                    await migration.instance!.up(queryRunner)
+                } catch (error) {
+                    this.connection.logger.logMigration(
+                        `Migration "${migration.name}" failed, error: ${error?.message}`,
+                    )
+                    throw error
+                }
+
+                // now when migration is executed we need to insert record about it into the database
+                await this.insertExecutedMigration(queryRunner, migration)
+
+                // commit transaction if we started it
+                if (migration.transaction && transactionStartedByUs) {
+                    await queryRunner.commitTransaction()
+                    await queryRunner.afterMigration()
+                    await migration.instance!.afterTransaction?.(queryRunner)
+                }
+
+                // informative log about migration success
+                successMigrations.push(migration)
+                this.connection.logger.logSchemaBuild(
+                    `Migration ${migration.name} has been ${
+                        this.fake ? "(fake)" : ""
+                    } executed successfully.`,
+                )
             }
 
             // commit transaction if we started it
@@ -381,6 +378,8 @@ export class MigrationExecutor {
 
             throw err
         } finally {
+            // If a migration failed, still call `afterMigration` to reset foreign-key checks
+           if (!this.fake) await queryRunner.afterMigration()
             // if query runner was created by us then release it
             if (!this.queryRunner) await queryRunner.release()
         }
@@ -458,7 +457,6 @@ export class MigrationExecutor {
             if (!this.fake) {
                 await queryRunner.beforeMigration()
                 await migrationToRevert.instance!.down(queryRunner)
-                await queryRunner.afterMigration()
             }
 
             await this.deleteExecutedMigration(queryRunner, migrationToRevert)
@@ -481,6 +479,7 @@ export class MigrationExecutor {
 
             throw err
         } finally {
+            if (!this.fake) await queryRunner.afterMigration()
             // if query runner was created by us then release it
             if (!this.queryRunner) await queryRunner.release()
         }
